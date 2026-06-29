@@ -390,7 +390,8 @@
 </div>
 
 <div class="tabs">
-  <button class="tab active"  onclick="switchTab('card')">Cartão</button>
+  <button class="tab active"  onclick="switchTab('card')">vCard</button>
+  <button class="tab"         onclick="switchTab('wifi')">Wi-Fi</button>
   <button class="tab"         onclick="switchTab('read')">Leitura</button>
   <button class="tab"         onclick="switchTab('write')">Gravação</button>
   <button class="tab"         onclick="switchTab('history')">Histórico</button>
@@ -458,6 +459,53 @@
 
 </div>
 
+<!-- WIFI PANEL -->
+ <div class="panel" id="panel-wifi">
+
+  <div class="field-group">
+    <label>Nome da rede (SSID)</label>
+    <input type="text" id="wf-ssid" placeholder="Ex: MinhaRede" oninput="updateWifiPreview()">
+  </div>
+
+  <div class="field-group">
+    <label>Segurança</label>
+    <select id="wf-security" onchange="toggleWifiPw()">
+      <option value="WPA">WPA / WPA2 / WPA3</option>
+      <option value="WEP">WEP</option>
+      <option value="nopass">Sem senha</option>
+    </select>
+  </div>
+
+  <div class="field-group" id="wf-pw-field">
+    <label>Senha</label>
+    <input type="text" id="wf-password" placeholder="Senha da Rede" oninput="updateWifiPreview()">
+  </div>
+
+  <div class="field-group" style="flex-direction: row; align-items: center; gap: 10px">
+    <input type="checkbox" id="wf-hidden" style="width:16px; height:16px; accent-color:#a78bfa; cursor:pointer">
+    <label style="margin:0; text-transform:nome; font-size:13px; color:#888; cursor:pointer" for="wf-hidden">
+      Rede oculta (SSID não transmitido)
+    </label>
+  </div>
+
+  <div class="section-divider">Payload gerado</div>
+
+  <div class="vcf-raw" id="wifi-raw">Preencha os campos acima…</div>
+
+  <div class="status-card">
+    <div class="status-dot" id="wifi-dot"></div>
+    <div class="status-text" id="wifi-status">Preencha o SSID e grave na tag.</div>
+  </div>
+
+  <button class="btn-main" id="btn-wifi-write" onclick="startWifiWrite()" disabled>
+    Gravar Wi-Fi na tag NFC
+  </button>
+  <button class="btn-stop" id="btn-wifi-stop" onclick="stopWifiWrite()" style="display:none">
+    Cancelar
+  </button>
+
+</div>
+
 <!-- READ PANEL -->
 <div class="panel" id="panel-read">
   <div class="status-card">
@@ -520,6 +568,7 @@ const NFCSupported = 'NDEFReader' in window;
 let scanReader = null;
 let writeReader = null;
 let cardReader = null;
+let wifiReader = null;
 let readHistory = JSON.parse(localStorage.getItem('nfc-history') || '[]');
 
 //  Init -----------
@@ -544,7 +593,7 @@ updateCardPreview();
 renderHistory();
 
 // Tabs ------------
-const TAB_NAMES = ['card','read','write','history'];
+const TAB_NAMES = ['card', 'wifi', 'read','write','history'];
 
 function switchTab(tab) {
   document.querySelectorAll('.tab').forEach((t, i) => {
@@ -664,6 +713,75 @@ function setCardStatus(state, msg) {
   dot.className = 'status-dot' + (state !== 'idle' ? ' ' + state : '');
   document.getElementById('card-status').textContent = msg;
 }
+
+// Wi-Fi -------------
+function wifiEscape(str) {
+  return str.replace(/[\\;,"':]/g, c => '\\' + c);
+}
+
+function buildWifiPayload() {
+  const ssid     = document.getElementById('wf-ssid').value.trim();
+  const security = document.getElementById('wf-security').value;
+  const password = document.getElementById('wf-password').value;
+  const h = document.getElementById('wf-hidden').checked ? 'true' : 'false';
+  if (!ssid) return '';
+  if (security === 'nopass')
+    return `WIFI:T:nopass;S:${wifiEscape(ssid)};H:${h};;`;
+  return `WIFI:T:${security};S:${wifiEscape(ssid)};P:${wifiEscape(password)};H:${h};;`;
+}
+
+function toggleWifiPw() {
+  const nopass = document.getElementById('wf-security').value === 'nopass';
+  document.getElementById('wf-pw-field').style.display = nopass ? 'none' : '';
+  updateWifiPreview();
+}
+
+function updateWifiPreview() {
+  const payload = buildWifiPayload();
+  document.getElementById('wifi-raw').textContent = payload || 'Preencha os campos acima…';
+  document.getElementById('btn-wifi-write').disabled = !NFCSupported || !payload;
+}
+
+async function startWifiWrite() {
+  if (!NFCSupported) return;
+  const payload = buildWifiPayload();
+  if (!payload) { setWifiStatus('error', 'Preencha o nome da rede.'); return; }
+
+  try {
+    wifiReader = new NDEFReader();
+    setWifiStatus('writing', 'Aproxime a tag NFC para gravar o Wi-Fi…');
+    document.getElementById('btn-wifi-write').style.display = 'none';
+    document.getElementById('btn-wifi-stop').style.display  = 'block';
+
+    await wifiReader.write({
+      records: [{ recordType: 'text', data: payload }]
+    });
+
+    setWifiStatus('success', 'Wi-Fi gravado com sucesso! ✓ Aproxime qualquer celular para conectar.');
+    document.getElementById('btn-wifi-write').style.display = 'block';
+    document.getElementById('btn-wifi-stop').style.display  = 'none';
+    wifiReader = null;
+  } catch (e) {
+    if (e.name !== 'AbortError') setWifiStatus('error', 'Erro ao gravar: ' + e.message);
+    document.getElementById('btn-wifi-write').style.display = 'block';
+    document.getElementById('btn-wifi-stop').style.display  = 'none';
+    wifiReader = null;
+  }
+}
+
+function stopWifiWrite() {
+  wifiReader = null;
+  setWifiStatus('idle', 'Gravação cancelada.');
+  document.getElementById('btn-wifi-write').style.display = 'block';
+  document.getElementById('btn-wifi-stop').style.display  = 'none';
+}
+
+function setWifiStatus(state, msg) {
+  const dot = document.getElementById('wifi-dot');
+  dot.className = 'status-dot' + (state !== 'idle' ? ' ' + state : '');
+  document.getElementById('wifi-status').textContent = msg;
+}
+
 
 // Read --------------
 async function startScan() {
